@@ -1,0 +1,10 @@
+[Unit]
+Description=Koji Build From Git
+
+[Service]
+Type=simple
+User=kojiuser
+ExecStart=/usr/bin/python /usr/local/bin/koji-bfg 2>&1 
+
+[Install]
+WantedBy=multi-user.target

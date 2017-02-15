@@ -1,0 +1,88 @@
+#/usr/bin/python
+#Author Anthony Boccia <anthony@boccia.me>
+#Reference http://pymotw.com/2/socket/tcp.html
+#Simple TCP/IP Socket Listener for incoming messages to trigger koji builds, use in conjunction with post-receive git hook
+import socket
+import sys
+import re
+import os
+import koji
+import logging
+import ConfigParser
+	
+def koji_build(url,tag,opts):
+	#Grab values from config
+	hub = 'http://' + config.get('koji-bfg', 'kojihub') + '/kojihub'
+	serverCA = config.get('koji-bfg', 'serverCA')
+	clientCA = config.get('koji-bfg', 'clientCA')
+	clientCRT = config.get('koji-bfg', 'clientCRT')
+	
+	#Setup Koji session and trigger the build
+	kojisession = koji.ClientSession(hub)
+	kojisession.ssl_login(clientCRT, clientCA, serverCA)
+	result = kojisession.build(url,tag,opts)
+	logging.info ('Koji Task created for build, ID: %s',result)
+	
+def process_data(data):
+	#Split the incoming data up and assign to vars
+	cmd_params = re.split('\s+', data)
+	
+	#Set Opts for Scratch if the commit had a scratch flag
+	if cmd_params[0]:
+		opts = {'scratch':True}
+	else:
+		opts = '' 
+	
+        #Set the rest of the vars to prep for tiggering kojibuild    
+	tag = cmd_params[1]
+	pkg = cmd_params[2]
+	url = config.get('koji-bfg', 'giturl') + '/' + config.get('koji-bfg', 'repo') + '?%s/#HEAD' % (pkg)
+	
+	#Call the Koji build function now that we have what we need
+	koji_build(url,tag,opts)
+	
+	
+if __name__ == "__main__":
+	
+	#Read in config
+	config = ConfigParser.ConfigParser(allow_no_value=False)
+	config.read("/etc/koji-bfg/kbfg.conf")
+	
+	#Get value for hub_address from config and convert to a tuple for use with socket
+	hub_address = config.get('koji-bfg', 'kojihub')
+	port = config.getint('koji-bfg', 'port')
+	hub_address = (hub_address, port)
+	
+	#Configure Logging
+	logging.basicConfig(filename='/var/log/koji-bfg-listener.log',format='%(asctime)s %(message)s',datefmt='%m-%d-%Y %I:%M:%S %p - ',level=logging.INFO)
+	
+	#Create the TCP/IP Socket
+	sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	
+	#Create socket, hub_address must be converted to a tuple here as that is what is expected
+	sock.bind(hub_address)
+	
+	#Now loop and listen for incoming connections
+	sock.listen(1)
+	
+	#Infinite Loop waiting for incoming connections
+	while True:
+		
+	    	logging.info('Listening for connections')
+	    	connection, client_address = sock.accept()
+	    	try:
+	        	logging.info ('Accepted connection from %s', client_address)
+	        	while True:
+				data = connection.recv(1024)
+				if data:
+					logging.info ('Receiving data from %s', client_address)
+					process_data(data)
+				else:
+					logging.info ('Client %s has disconnected', client_address)
+					break
+		#except should catch and log python errors if bad things are sent to the daemon.
+		except:
+			logging.exception('Caught Exception')
+	    	finally:
+	 		logging.info ('Terminating')
+	        	connection.close()

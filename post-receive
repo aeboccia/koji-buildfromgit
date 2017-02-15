@@ -1,0 +1,71 @@
+#!/usr/bin/env python
+import git
+import re
+import socket
+import sys
+from termcolor import colored, cprint
+
+def transmit_build(commit,path):
+    #Check for koji build triggers in commit message
+    if "#kojibuild" in commit:
+            #Use the power of regex to extract the tag from the commit
+            get_tag = re.search(r"dist-el(\d+)", commit)
+            if get_tag:
+                    tag = get_tag.group()
+            else:
+                    cprint ("Could not determine tag! Unable to continue! Please check your commit!", 'red')
+                    sys.exit(1)
+
+            #Check for scratch build
+            if "#scratch" in commit:
+                    sbuild = '--scratch'
+            else:
+                    sbuild = ''
+    else:
+            cprint("Did not find anything koji related in commit, will not trigger a build this time", 'red')
+            sys.exit(0)
+
+    # Create a TCP/IP socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    # Connect the socket to the port where the server is listening
+    server_address = ('koji-hub.example.org', 8081)
+    print >>sys.stderr, 'Connecting to %s on port %s' % server_address
+    sock.connect(server_address)
+
+    try:
+            # send it stuff
+            data_send = sbuild+' '+tag+' '+path
+            print >>sys.stderr, 'Sending the following data "%s"' % data_send
+            sock.sendall(data_send)
+
+    finally:
+            print >>sys.stderr, 'Closing Connection'
+            sock.close()
+            return 0
+
+if __name__ == "__main__":
+    #Get the git log info for the latest commit
+    repo = git.Git(".")
+    loginfo = repo.log('--oneline','--max-count=1','--name-only','HEAD')
+
+    #Split up loginfo at the newline so it can be worked with in pieces, then set commit = logsplit 1 which is the git commit message and set path = logsplit[2] which is the changed file path
+    logsplit = loginfo.split('\n')
+    commit = logsplit[0]
+    
+    #initialize some helper variables before the loop
+    count = 0
+    path_comp = ''
+
+    #For loop to compare each filepath in commit to check for commits of multiple packages in order to trigger multiple builds
+    for item in logsplit[1:]:
+        count = count + 1 
+        path = logsplit[count].rpartition('/')
+
+        #IF there is a match, just pass
+        if path[0] == path_comp:
+            pass 
+        else:
+            #IF you get here a difference has been found and we will trigger a build
+            transmit_build(commit,path[0])
+        path_comp = path[0]
